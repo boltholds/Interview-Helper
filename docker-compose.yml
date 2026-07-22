@@ -11,10 +11,10 @@ services:
       WHISPERCPP_THREADS: ${WHISPERCPP_THREADS:-6}
       WHISPERCPP_USE_GPU: "false"
       WHISPERCPP_FLASH_ATTENTION: "false"
+    ports:
+      - "127.0.0.1:${WHISPERCPP_HOST_PORT:-8081}:8080"
     volumes:
       - whisper_models:/models
-    expose:
-      - "8080"
     restart: unless-stopped
 
   backend:
