@@ -12,8 +12,11 @@ class Settings(BaseSettings):
 
     stt_provider: str = "stub"
     llm_provider: str = "stub"
-    embedding_provider: str = "stub"
+    embedding_provider: str = "local-hash"
+    embedding_model: str = "text-embedding-3-small"
+    local_embedding_dimensions: int = 256
     openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com"
 
     model_config = SettingsConfigDict(
         env_file=".env",
