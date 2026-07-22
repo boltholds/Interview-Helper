@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
-from typing import Literal
+import collections.abc
+import dataclasses
+import typing
 
 
-ChatRole = Literal["system", "user", "assistant"]
+ChatRole = typing.Literal["system", "user", "assistant"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class ChatMessage:
     role: ChatRole
     content: str
@@ -20,11 +20,17 @@ class LLMProvider(abc.ABC):
     model: str
 
     @abc.abstractmethod
-    def stream(self, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
+    def stream(
+        self,
+        messages: collections.abc.Sequence[ChatMessage],
+    ) -> collections.abc.AsyncIterator[str]:
         """Yield text deltas for a chat completion."""
         raise NotImplementedError
 
-    async def complete(self, messages: Sequence[ChatMessage]) -> str:
+    async def complete(
+        self,
+        messages: collections.abc.Sequence[ChatMessage],
+    ) -> str:
         chunks = [chunk async for chunk in self.stream(messages)]
         return "".join(chunks)
 
