@@ -29,8 +29,10 @@ class StreamingTranscriber(ABC):
         """Finalize any buffered audio and return final transcript updates."""
         raise NotImplementedError
 
+    @abstractmethod
     async def close(self) -> None:
         """Release provider resources."""
+        raise NotImplementedError
 
 
 def merge_transcript_text(previous: str, incoming: str, *, max_overlap_words: int = 16) -> str:
