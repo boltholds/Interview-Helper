@@ -147,7 +147,9 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         for item in ordered:
             raw_vector = item.get("embedding")
             if not isinstance(raw_vector, list) or not raw_vector:
-                raise EmbeddingProviderError("OpenAI embeddings response contains an invalid vector")
+                raise EmbeddingProviderError(
+                    "OpenAI embeddings response contains an invalid vector"
+                )
             vectors.append([float(value) for value in raw_vector])
 
         if len(vectors) != len(texts):
