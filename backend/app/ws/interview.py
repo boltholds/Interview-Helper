@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Iterable
 
@@ -177,8 +178,12 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                     transcriber = create_transcriber(settings, language=language)
                     validator = getattr(transcriber, "validate_runtime", None)
                     if callable(validator):
-                        validator()
+                        validation_result = validator()
+                        if inspect.isawaitable(validation_result):
+                            await validation_result
                 except (ValueError, WhisperCppError) as exc:
+                    if transcriber is not None:
+                        await transcriber.close()
                     transcriber = None
                     await _send_error(
                         websocket,
