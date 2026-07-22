@@ -32,7 +32,13 @@ class SearchResult:
     title: str
     ordinal: int
     metadata: dict[str, str]
-    bm25_score: float
+    content_hash: str = ""
+    bm25_score: float = 0.0
+    semantic_score: float = 0.0
+    bm25_normalized: float = 0.0
+    semantic_normalized: float = 0.0
+    metadata_score: float = 0.0
+    final_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,4 +49,9 @@ class SearchResult:
             "ordinal": self.ordinal,
             "metadata": self.metadata,
             "bm25_score": self.bm25_score,
+            "semantic_score": self.semantic_score,
+            "bm25_normalized": self.bm25_normalized,
+            "semantic_normalized": self.semantic_normalized,
+            "metadata_score": self.metadata_score,
+            "final_score": self.final_score,
         }
