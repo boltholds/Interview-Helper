@@ -26,4 +26,5 @@ Thumbs.db
 # Runtime data
 data/index/
 data/audio/
+runtime/whispercpp/
 *.log
