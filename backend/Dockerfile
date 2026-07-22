@@ -13,6 +13,7 @@ RUN poetry install --no-root --only main
 
 COPY app ./app
 COPY ingestion ./ingestion
+COPY llm ./llm
 COPY stt ./stt
 
 EXPOSE 8000
