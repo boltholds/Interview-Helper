@@ -11,9 +11,9 @@ fastapi = "^0.136.3"
 uvicorn = { version = "^0.35.0", extras = ["standard"] }
 pydantic = "^2.11.0"
 pydantic-settings = "^2.14.2"
+httpx = "^0.28.1"
 
 [tool.poetry.group.dev.dependencies]
-httpx = "^0.28.1"
 pytest = "^8.4.0"
 ruff = "^0.12.0"
 
