@@ -1,15 +1,37 @@
 services:
+  whispercpp:
+    build:
+      context: ./services/whispercpp
+      dockerfile: Dockerfile
+      args:
+        WHISPER_CPP_VERSION: ${WHISPER_CPP_VERSION:-v1.8.5}
+    environment:
+      WHISPERCPP_MODEL: ${WHISPERCPP_MODEL:-small}
+      WHISPERCPP_LANGUAGE: ${WHISPERCPP_LANGUAGE:-auto}
+      WHISPERCPP_THREADS: ${WHISPERCPP_THREADS:-6}
+      WHISPERCPP_USE_GPU: "false"
+      WHISPERCPP_FLASH_ATTENTION: "false"
+    volumes:
+      - whisper_models:/models
+    expose:
+      - "8080"
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
     env_file:
       - .env
+    environment:
+      WHISPERCPP_BASE_URL: ${WHISPERCPP_BASE_URL:-http://whispercpp:8080}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
       - ./data:/app/data
-      - ./runtime/whispercpp:/opt/whispercpp:ro
+    depends_on:
+      whispercpp:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
@@ -30,3 +52,6 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  whisper_models:
