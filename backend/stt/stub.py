@@ -7,3 +7,6 @@ class StubTranscriber(StreamingTranscriber):
 
     async def flush(self) -> list[TranscriptUpdate]:
         return []
+
+    async def close(self) -> None:
+        return None
