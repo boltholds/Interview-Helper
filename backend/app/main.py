@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from app.api.health import router as health_router
+from app.api.knowledge import router as knowledge_router
 from app.contracts.events import ClientEvent, ServerEvent, ServerEventType
 from app.core.config import get_settings
 
@@ -12,7 +13,7 @@ settings = get_settings()
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version="0.2.0",
     description="Interview Helper MVP backend",
 )
 app.add_middleware(
@@ -23,6 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(health_router, prefix=settings.api_prefix)
+app.include_router(knowledge_router, prefix=settings.api_prefix)
 
 
 @app.websocket("/ws/interview/{session_id}")

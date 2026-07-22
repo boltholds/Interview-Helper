@@ -14,8 +14,10 @@ AI assistant for IT interviews.
 ## Repository structure
 
 ```text
-backend/   FastAPI application and domain contracts
-frontend/  React + Vite interview interface
+backend/            FastAPI application and domain contracts
+backend/ingestion/  Offline import, chunking, and SQLite FTS5 indexing
+backend/sources/    Knowledge source files
+frontend/           React + Vite interview interface
 docker-compose.yml
 ```
 
@@ -39,6 +41,33 @@ docker compose up --build
 - backend health: http://localhost:8000/api/v1/health
 - OpenAPI: http://localhost:8000/docs
 
+## Build the knowledge index
+
+From the `backend` directory:
+
+```bash
+poetry run python -m ingestion build-index ./sources \
+  --output ./data/index/knowledge.db
+```
+
+Supported source formats are Markdown, HTML, and JSON. Markdown frontmatter and JSON metadata are copied to every generated chunk. Useful metadata fields include `role`, `topic`, `level`, `language`, and `source_url`.
+
+Check the local BM25 search from the command line:
+
+```bash
+poetry run python -m ingestion search "reliable background jobs" \
+  --index ./data/index/knowledge.db \
+  --role "Python Developer"
+```
+
+The backend exposes the same index through:
+
+```text
+GET /api/v1/knowledge/search?q=reliable+jobs&limit=5&role=Python+Developer
+```
+
+Index creation is atomic: a temporary database is built first and replaces the active file only after a successful transaction.
+
 ## Backend without Docker
 
 ```bash
@@ -57,4 +86,4 @@ npm run dev
 
 ## Current milestone
 
-The first milestone establishes executable frontend/backend skeletons and stable transport/domain contracts. STT, question detection, retrieval, and generation are implemented in subsequent slices.
+The repository now includes the first retrieval slice: source loading, text normalization, deterministic chunking, metadata preservation, a local SQLite FTS5/BM25 index, CLI commands, and a read-only search API. Semantic retrieval and score fusion are added in the next slice.
