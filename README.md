@@ -14,106 +14,141 @@ AI assistant for IT interviews.
 ## Repository structure
 
 ```text
-backend/            FastAPI application and domain contracts
-backend/ingestion/  Offline import, chunking, embeddings, and hybrid retrieval
-backend/stt/        Streaming STT contracts and whisper.cpp adapter
-backend/sources/    Knowledge source files
-frontend/           React + Vite interview interface
-scripts/            Runtime setup scripts
-runtime/            Local binaries and models, ignored by Git
-docker-compose.yml
+backend/                    FastAPI application and provider adapters
+backend/ingestion/          Import, chunking, embeddings, and Hybrid RAG
+backend/llm/                LLM contracts and OpenRouter client
+backend/stt/                Streaming STT contracts and whisper.cpp HTTP client
+backend/sources/            Knowledge source files
+frontend/                   React + Vite interview interface
+services/whispercpp/        Dedicated whisper-server CPU/CUDA images
+docker-compose.yml          Portable CPU stack
+docker-compose.gpu.yml      NVIDIA GPU override
 ```
 
-## Install whisper.cpp
+## Architecture
 
-The setup script pins whisper.cpp `v1.8.5`, builds `whisper-cli`, and downloads a multilingual GGML model into `runtime/whispercpp`:
+```text
+Browser microphone
+  -> AudioWorklet: mono PCM16, 16 kHz
+  -> FastAPI WebSocket
+  -> rolling STT windows
+  -> whispercpp container: whisper-server
+  -> partial/final transcript events
 
-```bash
-bash scripts/setup-whispercpp.sh
+Knowledge sources
+  -> OpenRouter embeddings
+  -> SQLite BM25 + vectors
+  -> Hybrid RAG
+  -> OpenRouter streaming LLM
 ```
 
-The default model is `small`. Override it when needed:
+The whisper.cpp model is loaded once by `whisper-server` and remains in the separate STT container. The backend sends temporary WAV windows to its internal `/inference` endpoint instead of launching a new process and loading the model for every window.
 
-```bash
-WHISPER_CPP_MODEL=base bash scripts/setup-whispercpp.sh
-```
+## Configuration
 
-For a CUDA build:
-
-```bash
-WHISPER_CPP_CUDA=1 bash scripts/setup-whispercpp.sh
-```
-
-The CUDA build requires a working CUDA toolkit. The default CPU build is sufficient for development and CI because tests use a fake command runner and do not download model weights.
-
-## Local development
-
-1. Install whisper.cpp as described above.
-
-2. Copy environment variables:
+Copy the environment template and add an OpenRouter key:
 
 ```bash
 cp .env.example .env
 ```
 
-3. Start both applications:
+```env
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Default remote providers:
+
+```env
+LLM_PROVIDER=openrouter
+LLM_MODEL=~google/gemini-flash-latest
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+```
+
+OpenRouter uses one API key and one OpenAI-compatible base URL for both `/chat/completions` and `/embeddings`. Set `OPENROUTER_HTTP_REFERER` when the application has a public URL; `OPENROUTER_APP_TITLE` controls the title shown in OpenRouter usage metadata.
+
+## Start with CPU transcription
 
 ```bash
 docker compose up --build
 ```
 
-4. Open:
+On first start, the whisper.cpp service downloads the selected GGML model into the persistent `whisper_models` volume. Later container rebuilds reuse the model.
+
+Open:
 
 - frontend: http://localhost:5173
 - backend health: http://localhost:8000/api/v1/health
-- OpenAPI: http://localhost:8000/docs
+- backend OpenAPI: http://localhost:8000/docs
+- whisper.cpp health on the local machine: http://localhost:8081/health
 
-The browser captures microphone audio through an `AudioWorklet`, downsamples it to signed little-endian PCM16, mono, 16 kHz, and sends binary WebSocket frames to `/ws/interview/{session_id}`. JSON frames on the same socket control session start and stop.
+The whisper.cpp port is bound to `127.0.0.1` and is not exposed to the external network.
 
-The backend runs `whisper-cli` on rolling windows. Defaults:
+## Start with NVIDIA GPU transcription
+
+Install the NVIDIA driver and NVIDIA Container Toolkit, then run:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+The GPU override builds whisper.cpp with CUDA, requests all available GPUs for the STT container, and enables flash attention. The default CUDA image version is configurable through `CUDA_VERSION`.
+
+## Transcription behavior
+
+The browser captures microphone audio through an `AudioWorklet`, downsamples it to signed little-endian PCM16 mono at 16 kHz, and sends binary WebSocket frames to `/ws/interview/{session_id}`. JSON frames on the same socket control session start and stop.
+
+Default rolling-window parameters:
 
 - partial update every 3 seconds;
 - final window every 12 seconds;
 - 1 second overlap between final windows;
-- language auto-detection;
-- GPU and flash attention enabled when supported by the binary.
+- automatic language detection;
+- structured `stt_unavailable` and `stt_failed` errors;
+- up to three frontend WebSocket reconnection attempts.
 
-All values are configurable through `WHISPERCPP_*` environment variables. The backend validates the executable and model when `start_session` is received and returns a structured `stt_unavailable` error if the runtime is incomplete.
+The backend checks `http://whispercpp:8080/health` when a session starts. The container exposes the official whisper.cpp `/health` and `/inference` endpoints and keeps the model resident between requests.
 
-For backend development outside Docker, point the variables at the host runtime:
+## Backend outside Docker
+
+Start only the STT service:
 
 ```bash
-export WHISPERCPP_BINARY_PATH="$PWD/runtime/whispercpp/bin/whisper-cli"
-export WHISPERCPP_MODEL_PATH="$PWD/runtime/whispercpp/models/ggml-small.bin"
+docker compose up --build whispercpp
+```
+
+Then run the backend against the loopback port:
+
+```bash
 cd backend
 poetry install
+WHISPERCPP_BASE_URL=http://localhost:8081 \
 poetry run uvicorn app.main:app --reload
 ```
 
 ## Build the knowledge index
 
-From the `backend` directory:
+The default index build uses OpenRouter embeddings:
 
 ```bash
+cd backend
 poetry run python -m ingestion build-index ./sources \
   --output ./data/index/knowledge.db
 ```
 
-The default `local-hash` provider is deterministic, requires no model download, and is intended for development and offline tests. To build a production-quality semantic index through OpenAI embeddings:
+The same provider and model must be selected when querying. The index manifest stores the provider, model, dimensions, and vector count so incompatible runtime configuration fails explicitly.
+
+For tests or completely offline development, use the deterministic hashing fallback:
 
 ```bash
-export OPENAI_API_KEY="..."
 poetry run python -m ingestion build-index ./sources \
   --output ./data/index/knowledge.db \
-  --embedding-provider openai \
-  --embedding-model text-embedding-3-small
+  --embedding-provider local-hash
 ```
 
-The same provider and model must be selected when querying the index. The index manifest stores the provider, model, dimensions, and vector count so incompatible runtime configuration fails explicitly instead of silently degrading retrieval.
+Supported source formats are Markdown, HTML, and JSON. Frontmatter and JSON metadata are copied to chunks. Useful fields include `role`, `topic`, `level`, `language`, and `source_url`.
 
-Supported source formats are Markdown, HTML, and JSON. Markdown frontmatter and JSON metadata are copied to every generated chunk. Useful metadata fields include `role`, `topic`, `level`, `language`, and `source_url`.
-
-Search the hybrid index from the command line:
+Search the hybrid index:
 
 ```bash
 poetry run python -m ingestion search "reliable background jobs" \
@@ -127,17 +162,13 @@ Hybrid ranking uses semantic similarity, normalized BM25, and metadata relevance
 final_score = 0.55 * semantic + 0.35 * bm25 + 0.10 * metadata
 ```
 
-Candidates from both retrieval layers are merged and deduplicated by content hash. Exact filters are available for `role`, `topic`, `level`, and `language`.
-
 The backend exposes the same retrieval pipeline through:
 
 ```text
 GET /api/v1/knowledge/search?q=reliable+jobs&limit=5&role=Python+Developer
 ```
 
-Each result includes raw and normalized lexical/semantic scores plus the final fused score. Index creation remains atomic: a temporary database is built first and replaces the active file only after a successful transaction.
-
-## Frontend without Docker
+## Frontend outside Docker
 
 ```bash
 cd frontend
@@ -147,4 +178,4 @@ npm run dev
 
 ## Current milestone
 
-The application now has an end-to-end transcription path: browser microphone capture, PCM16 WebSocket transport, whisper.cpp rolling-window inference, partial/final transcript events, overlap-aware text merging, explicit runtime errors, and connection recovery. The next slice consumes final transcript segments to detect and confirm interview questions.
+The application now has browser audio capture, binary WebSocket transport, a dedicated persistent whisper.cpp service, partial/final transcription events, OpenRouter embeddings, Hybrid RAG, and a streaming OpenRouter LLM adapter. The next vertical slice consumes final transcript segments to detect and confirm interview questions before generating an answer.
