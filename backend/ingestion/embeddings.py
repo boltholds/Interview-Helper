@@ -83,20 +83,24 @@ class HashingEmbeddingProvider(EmbeddingProvider):
         return [self._embed_one(text) for text in texts]
 
 
-class OpenAIEmbeddingProvider(EmbeddingProvider):
-    name = "openai"
+class OpenAICompatibleEmbeddingProvider(EmbeddingProvider):
+    name = "openai-compatible"
 
     def __init__(
         self,
         *,
         api_key: str,
-        model: str = "text-embedding-3-small",
-        base_url: str = "https://api.openai.com",
+        model: str,
+        base_url: str,
         batch_size: int = 64,
         timeout_seconds: float = 60.0,
+        http_referer: str | None = None,
+        app_title: str | None = None,
+        document_input_type: str | None = None,
+        query_input_type: str | None = None,
     ) -> None:
         if not api_key:
-            raise ValueError("OPENAI_API_KEY is required for the OpenAI embedding provider")
+            raise ValueError("An API key is required for the embedding provider")
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
         self.api_key = api_key
@@ -104,27 +108,46 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.base_url = base_url.rstrip("/")
         self.batch_size = batch_size
         self.timeout_seconds = timeout_seconds
+        self.http_referer = http_referer
+        self.app_title = app_title
+        self.document_input_type = document_input_type
+        self.query_input_type = query_input_type
         self._dimensions: int | None = None
 
     @property
     def dimensions(self) -> int | None:
         return self._dimensions
 
-    def _request(self, texts: Sequence[str]) -> list[list[float]]:
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Interview-Helper/0.5",
+        }
+        if self.http_referer:
+            headers["HTTP-Referer"] = self.http_referer
+        if self.app_title:
+            headers["X-OpenRouter-Title"] = self.app_title
+        return headers
+
+    def _request(
+        self,
+        texts: Sequence[str],
+        *,
+        input_type: str | None = None,
+    ) -> list[list[float]]:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "input": list(texts),
+            "encoding_format": "float",
+        }
+        if input_type:
+            body["input_type"] = input_type
+
         request = urllib.request.Request(
-            f"{self.base_url}/v1/embeddings",
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "input": list(texts),
-                    "encoding_format": "float",
-                }
-            ).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "Interview-Helper/0.3",
-            },
+            f"{self.base_url}/embeddings",
+            data=json.dumps(body).encode("utf-8"),
+            headers=self._headers(),
             method="POST",
         )
         try:
@@ -133,14 +156,18 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise EmbeddingProviderError(
-                f"OpenAI embeddings request failed with HTTP {exc.code}: {detail}"
+                f"{self.name} embeddings request failed with HTTP {exc.code}: {detail}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise EmbeddingProviderError(f"OpenAI embeddings request failed: {exc}") from exc
+            raise EmbeddingProviderError(
+                f"{self.name} embeddings request failed: {exc}"
+            ) from exc
 
         data = payload.get("data")
         if not isinstance(data, list):
-            raise EmbeddingProviderError("OpenAI embeddings response does not contain data")
+            raise EmbeddingProviderError(
+                f"{self.name} embeddings response does not contain data"
+            )
 
         ordered = sorted(data, key=lambda item: item.get("index", -1))
         vectors: list[list[float]] = []
@@ -148,25 +175,84 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             raw_vector = item.get("embedding")
             if not isinstance(raw_vector, list) or not raw_vector:
                 raise EmbeddingProviderError(
-                    "OpenAI embeddings response contains an invalid vector"
+                    f"{self.name} embeddings response contains an invalid vector"
                 )
             vectors.append([float(value) for value in raw_vector])
 
         if len(vectors) != len(texts):
             raise EmbeddingProviderError(
-                f"OpenAI returned {len(vectors)} embeddings for {len(texts)} inputs"
+                f"{self.name} returned {len(vectors)} embeddings for {len(texts)} inputs"
             )
         dimensions = len(vectors[0])
         if any(len(vector) != dimensions for vector in vectors):
-            raise EmbeddingProviderError("OpenAI returned vectors with inconsistent dimensions")
+            raise EmbeddingProviderError(
+                f"{self.name} returned vectors with inconsistent dimensions"
+            )
         self._dimensions = dimensions
         return vectors
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self.batch_size):
-            vectors.extend(self._request(texts[start:start + self.batch_size]))
+            vectors.extend(
+                self._request(
+                    texts[start:start + self.batch_size],
+                    input_type=self.document_input_type,
+                )
+            )
         return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        vectors = self._request([text], input_type=self.query_input_type)
+        return vectors[0]
+
+
+class OpenAIEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
+    name = "openai"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = "text-embedding-3-small",
+        base_url: str = "https://api.openai.com/v1",
+        batch_size: int = 64,
+        timeout_seconds: float = 60.0,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            batch_size=batch_size,
+            timeout_seconds=timeout_seconds,
+        )
+
+
+class OpenRouterEmbeddingProvider(OpenAICompatibleEmbeddingProvider):
+    name = "openrouter"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = "qwen/qwen3-embedding-8b",
+        base_url: str = "https://openrouter.ai/api/v1",
+        batch_size: int = 64,
+        timeout_seconds: float = 60.0,
+        http_referer: str | None = None,
+        app_title: str = "Interview Helper",
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            batch_size=batch_size,
+            timeout_seconds=timeout_seconds,
+            http_referer=http_referer,
+            app_title=app_title,
+            document_input_type="search_document",
+            query_input_type="search_query",
+        )
 
 
 def create_embedding_provider(
@@ -176,14 +262,26 @@ def create_embedding_provider(
     api_key: str | None = None,
     base_url: str | None = None,
     local_dimensions: int = 256,
+    http_referer: str | None = None,
+    app_title: str | None = None,
 ) -> EmbeddingProvider:
     selected = (provider or os.getenv("EMBEDDING_PROVIDER") or "local-hash").casefold()
     if selected in {"local-hash", "hash", "stub"}:
         return HashingEmbeddingProvider(dimensions=local_dimensions)
+    if selected == "openrouter":
+        return OpenRouterEmbeddingProvider(
+            api_key=api_key or os.getenv("OPENROUTER_API_KEY", ""),
+            model=model or os.getenv("EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
+            base_url=base_url
+            or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            http_referer=http_referer or os.getenv("OPENROUTER_HTTP_REFERER"),
+            app_title=app_title
+            or os.getenv("OPENROUTER_APP_TITLE", "Interview Helper"),
+        )
     if selected == "openai":
         return OpenAIEmbeddingProvider(
             api_key=api_key or os.getenv("OPENAI_API_KEY", ""),
             model=model or os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
-            base_url=base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com"),
+            base_url=base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         )
     raise ValueError(f"Unsupported embedding provider: {provider}")

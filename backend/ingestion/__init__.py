@@ -3,6 +3,7 @@ from ingestion.embeddings import (
     EmbeddingProvider,
     HashingEmbeddingProvider,
     OpenAIEmbeddingProvider,
+    OpenRouterEmbeddingProvider,
     create_embedding_provider,
 )
 from ingestion.index import SQLiteKnowledgeIndex
@@ -18,6 +19,7 @@ __all__ = [
     "HybridRetriever",
     "HybridWeights",
     "OpenAIEmbeddingProvider",
+    "OpenRouterEmbeddingProvider",
     "SQLiteKnowledgeIndex",
     "build_knowledge_index",
     "chunk_document",

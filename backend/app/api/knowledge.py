@@ -38,9 +38,11 @@ def search_knowledge(
         provider = create_embedding_provider(
             settings.embedding_provider,
             model=settings.embedding_model,
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
+            api_key=settings.openrouter_api_key,
+            base_url=settings.openrouter_base_url,
             local_dimensions=settings.local_embedding_dimensions,
+            http_referer=settings.openrouter_http_referer,
+            app_title=settings.openrouter_app_title,
         )
         results = HybridRetriever(
             SQLiteKnowledgeIndex(Path(settings.knowledge_index_path)),

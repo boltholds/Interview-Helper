@@ -1,0 +1,12 @@
+services:
+  whispercpp:
+    build:
+      context: ./services/whispercpp
+      dockerfile: Dockerfile.cuda
+      args:
+        WHISPER_CPP_VERSION: ${WHISPER_CPP_VERSION:-v1.8.5}
+        CUDA_VERSION: ${CUDA_VERSION:-12.8.1}
+    environment:
+      WHISPERCPP_USE_GPU: "true"
+      WHISPERCPP_FLASH_ATTENTION: "true"
+    gpus: all

@@ -12,4 +12,7 @@ def healthcheck() -> dict[str, str]:
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.app_env,
+        "stt_provider": settings.stt_provider,
+        "llm_provider": settings.llm_provider,
+        "embedding_provider": settings.embedding_provider,
     }

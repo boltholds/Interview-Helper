@@ -1,27 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import shutil
-import tempfile
-from collections.abc import Awaitable, Callable, Sequence
+import io
+import wave
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from stt.audio import duration_ms, milliseconds_to_bytes, validate_pcm16, write_pcm16_wav
+import httpx
+
+from stt.audio import duration_ms, milliseconds_to_bytes, validate_pcm16
 from stt.base import StreamingTranscriber, TranscriptUpdate, merge_transcript_text
 
 
 class WhisperCppError(RuntimeError):
-    """Raised when whisper.cpp cannot transcribe an audio window."""
-
-
-@dataclass(frozen=True, slots=True)
-class CommandResult:
-    returncode: int
-    stdout: str
-    stderr: str
+    """Raised when the whisper.cpp service cannot transcribe an audio window."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,39 +22,28 @@ class WhisperResult:
     language: str | None = None
 
 
-CommandRunner = Callable[[Sequence[str]], Awaitable[CommandResult]]
-
-
-async def _default_runner(command: Sequence[str]) -> CommandResult:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await process.communicate()
-    return CommandResult(
-        returncode=process.returncode or 0,
-        stdout=stdout.decode("utf-8", errors="replace"),
-        stderr=stderr.decode("utf-8", errors="replace"),
-    )
+def _extract_segment_text(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        str(segment.get("text", "")).strip()
+        for segment in value
+        if isinstance(segment, dict) and segment.get("text")
+    ]
 
 
 def _extract_json_text(payload: dict[str, Any]) -> WhisperResult:
-    transcription = payload.get("transcription")
-    if isinstance(transcription, list):
-        parts = [
-            str(segment.get("text", "")).strip()
-            for segment in transcription
-            if isinstance(segment, dict) and segment.get("text")
-        ]
-        text = " ".join(part for part in parts if part).strip()
-    else:
-        result = payload.get("result")
-        text = str(result.get("text", "")).strip() if isinstance(result, dict) else ""
-        if not text:
-            text = str(payload.get("text", "")).strip()
+    parts = _extract_segment_text(payload.get("transcription"))
+    if not parts:
+        parts = _extract_segment_text(payload.get("segments"))
 
     result_block = payload.get("result")
+    text = " ".join(part for part in parts if part).strip()
+    if not text and isinstance(result_block, dict):
+        text = str(result_block.get("text", "")).strip()
+    if not text:
+        text = str(payload.get("text", "")).strip()
+
     language = None
     if isinstance(result_block, dict) and result_block.get("language"):
         language = str(result_block["language"])
@@ -71,25 +52,30 @@ def _extract_json_text(payload: dict[str, Any]) -> WhisperResult:
     return WhisperResult(text=text, language=language)
 
 
+def _wav_bytes(pcm16: bytes) -> bytes:
+    validate_pcm16(pcm16)
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16_000)
+        wav_file.writeframes(pcm16)
+    return output.getvalue()
+
+
 class WhisperCppTranscriber(StreamingTranscriber):
     def __init__(
         self,
         *,
-        binary_path: str,
-        model_path: Path,
+        server_url: str,
         language: str = "auto",
-        threads: int = 4,
         step_ms: int = 3_000,
         window_ms: int = 12_000,
         overlap_ms: int = 1_000,
         minimum_audio_ms: int = 500,
         timeout_seconds: float = 120.0,
-        use_gpu: bool = True,
-        flash_attention: bool = True,
-        runner: CommandRunner | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
-        if threads < 1:
-            raise ValueError("threads must be positive")
         if step_ms < 250:
             raise ValueError("step_ms must be at least 250")
         if window_ms <= step_ms:
@@ -98,20 +84,21 @@ class WhisperCppTranscriber(StreamingTranscriber):
             raise ValueError("overlap_ms must be between 0 and window_ms")
         if minimum_audio_ms < 100:
             raise ValueError("minimum_audio_ms must be at least 100")
+        if not server_url.strip():
+            raise ValueError("whisper.cpp server URL cannot be empty")
 
-        self.binary_path = binary_path
-        self.model_path = model_path
+        self.server_url = server_url.rstrip("/")
         self.language = language
-        self.threads = threads
         self.step_ms = step_ms
         self.window_ms = window_ms
         self.overlap_ms = overlap_ms
         self.minimum_audio_ms = minimum_audio_ms
         self.timeout_seconds = timeout_seconds
-        self.use_gpu = use_gpu
-        self.flash_attention = flash_attention
-        self._runner = runner or _default_runner
-        self._uses_default_runner = runner is None
+        self._owns_client = client is None
+        self._client = client or httpx.AsyncClient(
+            base_url=self.server_url,
+            timeout=httpx.Timeout(timeout_seconds),
+        )
 
         self._pending = bytearray()
         self._committed_text = ""
@@ -120,77 +107,55 @@ class WhisperCppTranscriber(StreamingTranscriber):
         self._last_partial_text = ""
         self._lock = asyncio.Lock()
 
-    def validate_runtime(self) -> None:
-        if not self._uses_default_runner:
-            return
-        executable = shutil.which(self.binary_path)
-        if executable is None and not Path(self.binary_path).is_file():
-            raise WhisperCppError(f"whisper-cli executable not found: {self.binary_path}")
-        if not self.model_path.is_file():
-            raise WhisperCppError(f"whisper.cpp model not found: {self.model_path}")
+    async def validate_runtime(self) -> None:
+        try:
+            response = await self._client.get("/health")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise WhisperCppError(
+                f"whisper.cpp service is unavailable at {self.server_url}: {exc}"
+            ) from exc
 
-    def _command(self, wav_path: Path, output_base: Path) -> list[str]:
-        command = [
-            self.binary_path,
-            "-m",
-            str(self.model_path),
-            "-f",
-            str(wav_path),
-            "-l",
-            self.language,
-            "-t",
-            str(self.threads),
-            "-oj",
-            "-of",
-            str(output_base),
-            "-np",
-            "--suppress-nst",
-        ]
-        if not self.use_gpu:
-            command.append("-ng")
-        if self.flash_attention:
-            command.append("-fa")
-        return command
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WhisperCppError("whisper.cpp health response is not valid JSON") from exc
+        if not isinstance(payload, dict) or payload.get("status") != "ok":
+            raise WhisperCppError(f"whisper.cpp service is not ready: {payload}")
 
     async def _transcribe(self, audio: bytes) -> WhisperResult:
         validate_pcm16(audio)
         if duration_ms(audio) < self.minimum_audio_ms:
             return WhisperResult(text="")
-        self.validate_runtime()
 
-        with tempfile.TemporaryDirectory(prefix="interview-helper-whisper-") as directory:
-            workdir = Path(directory)
-            wav_path = workdir / "audio.wav"
-            output_base = workdir / "transcript"
-            write_pcm16_wav(wav_path, audio)
-            try:
-                command_result = await asyncio.wait_for(
-                    self._runner(self._command(wav_path, output_base)),
-                    timeout=self.timeout_seconds,
-                )
-            except TimeoutError as exc:
-                raise WhisperCppError(
-                    f"whisper.cpp timed out after {self.timeout_seconds:.0f} seconds"
-                ) from exc
+        try:
+            response = await self._client.post(
+                "/inference",
+                files={"file": ("audio.wav", _wav_bytes(audio), "audio/wav")},
+                data={
+                    "language": self.language,
+                    "response_format": "verbose_json",
+                    "temperature": "0.0",
+                    "temperature_inc": "0.2",
+                    "no_speech_thold": "0.6",
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip()
+            raise WhisperCppError(
+                f"whisper.cpp inference failed with HTTP {exc.response.status_code}: {detail}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise WhisperCppError(f"whisper.cpp inference request failed: {exc}") from exc
 
-            if command_result.returncode != 0:
-                detail = command_result.stderr.strip() or command_result.stdout.strip()
-                raise WhisperCppError(
-                    f"whisper.cpp exited with code {command_result.returncode}: {detail}"
-                )
-
-            json_path = Path(f"{output_base}.json")
-            if not json_path.is_file():
-                raise WhisperCppError(
-                    "whisper.cpp did not create the expected JSON transcript"
-                )
-            try:
-                payload = json.loads(json_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                raise WhisperCppError(f"Cannot read whisper.cpp JSON output: {exc}") from exc
-            if not isinstance(payload, dict):
-                raise WhisperCppError("whisper.cpp JSON output must be an object")
-            return _extract_json_text(payload)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WhisperCppError("whisper.cpp inference response is not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise WhisperCppError("whisper.cpp inference response must be a JSON object")
+        return _extract_json_text(payload)
 
     def _final_update(
         self,
@@ -283,3 +248,5 @@ class WhisperCppTranscriber(StreamingTranscriber):
         self._pending.clear()
         self._last_partial_size = 0
         self._last_partial_text = ""
+        if self._owns_client:
+            await self._client.aclose()

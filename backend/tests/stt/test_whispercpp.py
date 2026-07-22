@@ -1,48 +1,47 @@
 import asyncio
-import json
-from collections.abc import Sequence
-from pathlib import Path
+
+import httpx
 
 from stt.base import TranscriptUpdate
-from stt.whispercpp import CommandResult, WhisperCppTranscriber
+from stt.whispercpp import WhisperCppTranscriber
 
 
 def _audio(milliseconds: int) -> bytes:
     return b"\x00\x00" * (16_000 * milliseconds // 1000)
 
 
-def test_whispercpp_emits_partial_and_final_updates(tmp_path: Path) -> None:
+def test_whispercpp_emits_partial_and_final_updates() -> None:
     calls = 0
 
-    async def runner(command: Sequence[str]) -> CommandResult:
+    def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        assert request.url.path == "/inference"
+        assert request.headers["content-type"].startswith("multipart/form-data")
         calls += 1
-        output_base = Path(command[command.index("-of") + 1])
         text = "worker retries" if calls == 1 else "worker retries and backoff"
-        Path(f"{output_base}.json").write_text(
-            json.dumps(
-                {
-                    "result": {"language": "en"},
-                    "transcription": [{"text": text}],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return CommandResult(returncode=0, stdout="", stderr="")
+        return httpx.Response(200, json={"language": "en", "text": text})
 
     async def scenario() -> tuple[list[TranscriptUpdate], list[TranscriptUpdate]]:
-        transcriber = WhisperCppTranscriber(
-            binary_path="whisper-cli",
-            model_path=tmp_path / "model.bin",
-            step_ms=250,
-            window_ms=1_000,
-            overlap_ms=100,
-            minimum_audio_ms=100,
-            runner=runner,
-        )
-        partial = await transcriber.push_audio(_audio(300))
-        final = await transcriber.flush()
-        return partial, final
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://whispercpp:8080",
+        ) as client:
+            transcriber = WhisperCppTranscriber(
+                server_url="http://whispercpp:8080",
+                step_ms=250,
+                window_ms=1_000,
+                overlap_ms=100,
+                minimum_audio_ms=100,
+                client=client,
+            )
+            await transcriber.validate_runtime()
+            partial = await transcriber.push_audio(_audio(300))
+            final = await transcriber.flush()
+            await transcriber.close()
+            return partial, final
 
     partial, final = asyncio.run(scenario())
 
@@ -53,26 +52,27 @@ def test_whispercpp_emits_partial_and_final_updates(tmp_path: Path) -> None:
     assert final[0].language == "en"
 
 
-def test_whispercpp_finalizes_full_windows(tmp_path: Path) -> None:
-    async def runner(command: Sequence[str]) -> CommandResult:
-        output_base = Path(command[command.index("-of") + 1])
-        Path(f"{output_base}.json").write_text(
-            json.dumps({"transcription": [{"text": "final segment"}]}),
-            encoding="utf-8",
-        )
-        return CommandResult(returncode=0, stdout="", stderr="")
+def test_whispercpp_finalizes_full_windows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"transcription": [{"text": "final segment"}]})
 
     async def scenario() -> list[TranscriptUpdate]:
-        transcriber = WhisperCppTranscriber(
-            binary_path="whisper-cli",
-            model_path=tmp_path / "model.bin",
-            step_ms=250,
-            window_ms=1_000,
-            overlap_ms=100,
-            minimum_audio_ms=100,
-            runner=runner,
-        )
-        return await transcriber.push_audio(_audio(1_000))
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://whispercpp:8080",
+        ) as client:
+            transcriber = WhisperCppTranscriber(
+                server_url="http://whispercpp:8080",
+                step_ms=250,
+                window_ms=1_000,
+                overlap_ms=100,
+                minimum_audio_ms=100,
+                client=client,
+            )
+            updates = await transcriber.push_audio(_audio(1_000))
+            await transcriber.close()
+            return updates
 
     updates = asyncio.run(scenario())
 

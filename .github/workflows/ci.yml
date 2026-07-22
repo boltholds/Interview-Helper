@@ -36,7 +36,21 @@ jobs:
       - name: Fail on Ruff errors
         if: steps.ruff.outcome == 'failure'
         run: exit 1
-      - run: poetry run pytest
+      - name: Run pytest
+        id: pytest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          poetry run pytest -ra | tee pytest-report.txt
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: backend/pytest-report.txt
+      - name: Fail on pytest errors
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
 
   frontend:
     runs-on: ubuntu-latest
@@ -50,3 +64,11 @@ jobs:
           node-version: "22"
       - run: npm install
       - run: npm run build
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
