@@ -192,7 +192,12 @@ class WhisperCppTranscriber(StreamingTranscriber):
                 raise WhisperCppError("whisper.cpp JSON output must be an object")
             return _extract_json_text(payload)
 
-    def _final_update(self, result: WhisperResult, start_ms: int, end_ms: int) -> TranscriptUpdate | None:
+    def _final_update(
+        self,
+        result: WhisperResult,
+        start_ms: int,
+        end_ms: int,
+    ) -> TranscriptUpdate | None:
         if not result.text:
             return None
         previous = self._committed_text
@@ -273,3 +278,8 @@ class WhisperCppTranscriber(StreamingTranscriber):
             self._processed_ms = end_ms
             self._last_partial_size = 0
             return [update] if update is not None else []
+
+    async def close(self) -> None:
+        self._pending.clear()
+        self._last_partial_size = 0
+        self._last_partial_text = ""
