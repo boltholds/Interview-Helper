@@ -39,7 +39,7 @@ button:disabled {
 }
 
 select {
-  min-width: 220px;
+  min-width: 180px;
   border: 1px solid #26304a;
   border-radius: 10px;
   padding: 0.75rem;
@@ -54,7 +54,8 @@ select {
 }
 
 .topbar,
-.session-controls {
+.session-controls,
+.panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -130,6 +131,10 @@ h2 {
   color: #b9c1d5;
 }
 
+.session-controls button {
+  margin-left: auto;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -145,9 +150,21 @@ h2 {
   min-height: 260px;
 }
 
+.transcript-panel {
+  min-height: 250px;
+}
+
 .placeholder {
   color: #8992a8;
   line-height: 1.65;
+}
+
+.transcript {
+  min-height: 8rem;
+  color: #eef2ff;
+  font-size: 1.05rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
 }
 
 .button-secondary {
@@ -156,10 +173,57 @@ h2 {
   background: transparent;
 }
 
+.recording-state {
+  border: 1px solid #38425d;
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  color: #9ba6bd;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.recording-state--recording {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.recording-state--connecting,
+.recording-state--stopping {
+  border-color: rgba(245, 158, 11, 0.55);
+  color: #fcd34d;
+}
+
+.recording-state--error {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #f87171;
+}
+
+.error-banner {
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 12px;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.22);
+}
+
+@media (max-width: 900px) {
+  .session-controls {
+    flex-wrap: wrap;
+  }
+
+  .session-controls button {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
 @media (max-width: 760px) {
   .topbar,
   .session-controls,
-  .session-controls label {
+  .session-controls label,
+  .panel-heading {
     align-items: stretch;
     flex-direction: column;
   }

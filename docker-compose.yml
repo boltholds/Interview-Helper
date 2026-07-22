@@ -9,6 +9,7 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/app/data
+      - ./runtime/whispercpp:/opt/whispercpp:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s

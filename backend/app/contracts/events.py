@@ -15,6 +15,8 @@ class ClientEventType(StrEnum):
 
 class ServerEventType(StrEnum):
     SESSION_READY = "session_ready"
+    STT_READY = "stt_ready"
+    STT_STOPPED = "stt_stopped"
     EVENT_ACCEPTED = "event_accepted"
     TRANSCRIPT_PARTIAL = "transcript_partial"
     TRANSCRIPT_FINAL = "transcript_final"
