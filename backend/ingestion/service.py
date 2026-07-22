@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ingestion.chunker import ChunkingConfig, chunk_document
+from ingestion.embeddings import EmbeddingProvider, HashingEmbeddingProvider
 from ingestion.index import SQLiteKnowledgeIndex
 from ingestion.loaders import discover_source_files, load_documents
 
@@ -17,6 +18,9 @@ class BuildReport:
     source_files: int
     documents: int
     chunks: int
+    embeddings: int
+    embedding_provider: str
+    embedding_model: str
     errors: list[str]
 
     def to_dict(self) -> dict[str, Any]:
@@ -28,6 +32,7 @@ def build_knowledge_index(
     output_path: Path,
     *,
     chunking: ChunkingConfig | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> BuildReport:
     if not source_dir.exists():
         raise FileNotFoundError(f"Source path does not exist: {source_dir}")
@@ -46,8 +51,22 @@ def build_knowledge_index(
     if not chunks:
         raise ValueError("Cannot build knowledge index: chunking produced no chunks")
 
+    provider = embedding_provider or HashingEmbeddingProvider()
+    vectors = provider.embed_documents([chunk.content for chunk in chunks])
+    if len(vectors) != len(chunks):
+        raise ValueError(
+            f"Embedding provider returned {len(vectors)} vectors for {len(chunks)} chunks"
+        )
+    embeddings = {
+        chunk.chunk_id: vector
+        for chunk, vector in zip(chunks, vectors, strict=True)
+    }
+
     SQLiteKnowledgeIndex(output_path).build(
         chunks,
+        embeddings=embeddings,
+        embedding_provider=provider.name,
+        embedding_model=provider.model,
         manifest={
             "built_at": datetime.now(UTC).isoformat(),
             "source_path": str(source_dir),
@@ -60,5 +79,8 @@ def build_knowledge_index(
         source_files=len(discover_source_files(source_dir)),
         documents=len(documents),
         chunks=len(chunks),
+        embeddings=len(embeddings),
+        embedding_provider=provider.name,
+        embedding_model=provider.model,
         errors=errors,
     )
