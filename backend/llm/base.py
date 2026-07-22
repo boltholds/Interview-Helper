@@ -1,40 +1,24 @@
-from __future__ import annotations
-
-import abc
-import collections.abc
-import dataclasses
-import typing
+from dataclasses import dataclass
 
 
-ChatRole = typing.Literal["system", "user", "assistant"]
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True)
 class ChatMessage:
-    role: ChatRole
+    role: str
     content: str
 
 
-class LLMProvider(abc.ABC):
+class LLMProvider:
     name: str
     model: str
 
-    @abc.abstractmethod
-    def stream(
-        self,
-        messages: collections.abc.Sequence[ChatMessage],
-    ) -> collections.abc.AsyncIterator[str]:
+    def stream(self, messages: list[ChatMessage]):
         """Yield text deltas for a chat completion."""
         raise NotImplementedError
 
-    async def complete(
-        self,
-        messages: collections.abc.Sequence[ChatMessage],
-    ) -> str:
+    async def complete(self, messages: list[ChatMessage]) -> str:
         chunks = [chunk async for chunk in self.stream(messages)]
         return "".join(chunks)
 
-    @abc.abstractmethod
     async def close(self) -> None:
         """Release provider resources."""
-        raise NotImplementedError
+        return None
