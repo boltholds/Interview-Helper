@@ -12,6 +12,8 @@ COPY pyproject.toml ./
 RUN poetry install --no-root --only main
 
 COPY app ./app
+COPY ingestion ./ingestion
+COPY stt ./stt
 
 EXPOSE 8000
 
