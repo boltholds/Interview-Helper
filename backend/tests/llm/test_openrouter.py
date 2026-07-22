@@ -9,7 +9,7 @@ from llm.openrouter import OpenRouterLLMProvider
 
 def test_openrouter_streams_chat_completion_deltas() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/chat/completions"
+        assert request.url.path == "/api/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer test-key"
         assert request.headers["x-openrouter-title"] == "Interview Helper Tests"
         payload = json.loads(request.content)
