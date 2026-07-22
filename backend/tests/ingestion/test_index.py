@@ -21,8 +21,16 @@ def test_builds_and_searches_fts_index(tmp_path: Path) -> None:
     index = SQLiteKnowledgeIndex(path)
     index.build(
         [
-            _chunk("python", "Idempotent workers use retries and exponential backoff.", role="Python Developer"),
-            _chunk("frontend", "React components render a browser interface.", role="Frontend Developer"),
+            _chunk(
+                "python",
+                "Idempotent workers use retries and exponential backoff.",
+                role="Python Developer",
+            ),
+            _chunk(
+                "frontend",
+                "React components render a browser interface.",
+                role="Frontend Developer",
+            ),
         ]
     )
 

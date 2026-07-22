@@ -37,7 +37,9 @@ _BLOCK_TAGS = {
 def normalize_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u200b", "")
     paragraphs = re.split(r"\n\s*\n", text)
-    normalized = [re.sub(r"[ \t\f\v]+", " ", paragraph).strip() for paragraph in paragraphs]
+    normalized = [
+        re.sub(r"[ \t\f\v]+", " ", paragraph).strip() for paragraph in paragraphs
+    ]
     return "\n\n".join(paragraph for paragraph in normalized if paragraph)
 
 
@@ -179,7 +181,9 @@ def _string_metadata(value: Any) -> str | None:
         return "true" if value else "false"
     if isinstance(value, (str, int, float)):
         return str(value)
-    if isinstance(value, list) and all(isinstance(item, (str, int, float, bool)) for item in value):
+    if isinstance(value, list) and all(
+        isinstance(item, (str, int, float, bool)) for item in value
+    ):
         return ", ".join(str(item) for item in value)
     return None
 

@@ -38,7 +38,11 @@ def build_knowledge_index(
         raise ValueError(f"Cannot build knowledge index: {detail}")
 
     active_chunking = chunking or ChunkingConfig()
-    chunks = [chunk for document in documents for chunk in chunk_document(document, active_chunking)]
+    chunks = [
+        chunk
+        for document in documents
+        for chunk in chunk_document(document, active_chunking)
+    ]
     if not chunks:
         raise ValueError("Cannot build knowledge index: chunking produced no chunks")
 

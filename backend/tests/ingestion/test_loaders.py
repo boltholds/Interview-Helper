@@ -6,12 +6,15 @@ from ingestion.loaders import load_documents
 
 def test_loads_markdown_html_and_json(tmp_path: Path) -> None:
     (tmp_path / "python.md").write_text(
-        "---\ntitle: Python retries\nrole: Python Developer\n---\n\n# Retry\n\nUse backoff.",
+        "---\ntitle: Python retries\nrole: Python Developer\n---\n\n"
+        "# Retry\n\nUse backoff.",
         encoding="utf-8",
     )
     (tmp_path / "database.html").write_text(
-        "<html><head><title>Indexes</title><meta name='topic' content='databases'></head>"
-        "<body><script>ignore me</script><h1>B-tree</h1><p>Indexes speed up reads.</p></body></html>",
+        "<html><head><title>Indexes</title>"
+        "<meta name='topic' content='databases'></head>"
+        "<body><script>ignore me</script><h1>B-tree</h1>"
+        "<p>Indexes speed up reads.</p></body></html>",
         encoding="utf-8",
     )
     (tmp_path / "questions.json").write_text(

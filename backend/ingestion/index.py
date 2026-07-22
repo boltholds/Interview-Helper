@@ -5,8 +5,8 @@ import os
 import re
 import sqlite3
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from ingestion.models import KnowledgeChunk, SearchResult
 
@@ -134,11 +134,16 @@ class SQLiteKnowledgeIndex:
                 (self._fts_query(query), candidate_limit),
             ).fetchall()
 
-        requested_filters = {key: value.casefold() for key, value in (filters or {}).items() if value}
+        requested_filters = {
+            key: value.casefold() for key, value in (filters or {}).items() if value
+        }
         results: list[SearchResult] = []
         for row in rows:
             metadata = json.loads(row["metadata_json"])
-            if any(str(metadata.get(key, "")).casefold() != value for key, value in requested_filters.items()):
+            if any(
+                str(metadata.get(key, "")).casefold() != value
+                for key, value in requested_filters.items()
+            ):
                 continue
             results.append(
                 SearchResult(

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -7,12 +8,14 @@ from app.core.config import get_settings
 from ingestion.index import SQLiteKnowledgeIndex
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+SearchQuery = Annotated[str, Query(min_length=2, max_length=500)]
+SearchLimit = Annotated[int, Query(ge=1, le=20)]
 
 
 @router.get("/search", response_model=KnowledgeSearchResponse)
 def search_knowledge(
-    q: str = Query(min_length=2, max_length=500),
-    limit: int = Query(default=5, ge=1, le=20),
+    q: SearchQuery,
+    limit: SearchLimit = 5,
     role: str | None = None,
     topic: str | None = None,
     language: str | None = None,
