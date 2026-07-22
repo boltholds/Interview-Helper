@@ -10,7 +10,19 @@ class Settings(BaseSettings):
     backend_cors_origins: list[str] = ["http://localhost:5173"]
     knowledge_index_path: str = "data/index/knowledge.db"
 
-    stt_provider: str = "stub"
+    stt_provider: str = "whispercpp"
+    whispercpp_binary_path: str = "whisper-cli"
+    whispercpp_model_path: str = "models/ggml-small.bin"
+    whispercpp_language: str = "auto"
+    whispercpp_threads: int = 6
+    whispercpp_step_ms: int = 3_000
+    whispercpp_window_ms: int = 12_000
+    whispercpp_overlap_ms: int = 1_000
+    whispercpp_minimum_audio_ms: int = 500
+    whispercpp_timeout_seconds: float = 120.0
+    whispercpp_use_gpu: bool = True
+    whispercpp_flash_attention: bool = True
+
     llm_provider: str = "stub"
     embedding_provider: str = "local-hash"
     embedding_model: str = "text-embedding-3-small"
