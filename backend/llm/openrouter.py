@@ -119,7 +119,12 @@ class OpenRouterLLMProvider(LLMProvider):
                 headers=self._headers(),
                 json=request_body,
             ) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    detail = (await response.aread()).decode("utf-8", errors="replace")
+                    raise OpenRouterError(
+                        "OpenRouter chat request failed with HTTP "
+                        f"{response.status_code}: {detail}"
+                    )
                 async for line in response.aiter_lines():
                     if not line or line.startswith(":"):
                         continue
@@ -131,11 +136,8 @@ class OpenRouterLLMProvider(LLMProvider):
                     text = self._parse_event(data)
                     if text:
                         yield text
-        except httpx.HTTPStatusError as exc:
-            detail = (await exc.response.aread()).decode("utf-8", errors="replace")
-            raise OpenRouterError(
-                f"OpenRouter chat request failed with HTTP {exc.response.status_code}: {detail}"
-            ) from exc
+        except OpenRouterError:
+            raise
         except httpx.HTTPError as exc:
             raise OpenRouterError(f"OpenRouter chat request failed: {exc}") from exc
 
