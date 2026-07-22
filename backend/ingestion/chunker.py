@@ -54,7 +54,11 @@ def _split_long_text(text: str, max_chars: int, overlap_chars: int) -> list[str]
 
 
 def _segments(content: str, config: ChunkingConfig) -> list[str]:
-    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", content) if paragraph.strip()]
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n", content)
+        if paragraph.strip()
+    ]
     output: list[str] = []
     for paragraph in paragraphs:
         if len(paragraph) <= config.max_chars:
@@ -98,7 +102,7 @@ def chunk_document(
     chunks: list[KnowledgeChunk] = []
     for ordinal, content in enumerate(texts):
         fingerprint = hashlib.sha256(
-            f"{document.source_path}:{ordinal}:{content}".encode("utf-8")
+            f"{document.source_path}:{ordinal}:{content}".encode()
         ).hexdigest()
         chunks.append(
             KnowledgeChunk(
@@ -108,7 +112,7 @@ def chunk_document(
                 title=document.title,
                 ordinal=ordinal,
                 metadata=dict(document.metadata),
-                content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                content_hash=hashlib.sha256(content.encode()).hexdigest(),
             )
         )
     return chunks

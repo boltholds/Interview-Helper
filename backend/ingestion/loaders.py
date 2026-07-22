@@ -179,10 +179,10 @@ def _load_html(path: Path, root: Path) -> list[SourceDocument]:
 def _string_metadata(value: Any) -> str | None:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, str | int | float):
         return str(value)
     if isinstance(value, list) and all(
-        isinstance(item, (str, int, float, bool)) for item in value
+        isinstance(item, str | int | float | bool) for item in value
     ):
         return ", ".join(str(item) for item in value)
     return None
