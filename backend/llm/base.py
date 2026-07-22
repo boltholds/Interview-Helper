@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+import abc
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -15,11 +15,11 @@ class ChatMessage:
     content: str
 
 
-class LLMProvider(ABC):
+class LLMProvider(abc.ABC):
     name: str
     model: str
 
-    @abstractmethod
+    @abc.abstractmethod
     def stream(self, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
         """Yield text deltas for a chat completion."""
         raise NotImplementedError
@@ -28,5 +28,7 @@ class LLMProvider(ABC):
         chunks = [chunk async for chunk in self.stream(messages)]
         return "".join(chunks)
 
+    @abc.abstractmethod
     async def close(self) -> None:
         """Release provider resources."""
+        raise NotImplementedError
