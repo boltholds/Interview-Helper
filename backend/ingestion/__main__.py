@@ -16,12 +16,12 @@ from ingestion.service import build_knowledge_index
 def _add_embedding_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--embedding-provider",
-        default=os.getenv("EMBEDDING_PROVIDER", "local-hash"),
-        choices=["local-hash", "openai"],
+        default=os.getenv("EMBEDDING_PROVIDER", "openrouter"),
+        choices=["local-hash", "openrouter", "openai"],
     )
     parser.add_argument(
         "--embedding-model",
-        default=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        default=os.getenv("EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
     )
     parser.add_argument(
         "--local-embedding-dimensions",
@@ -29,18 +29,26 @@ def _add_embedding_arguments(parser: argparse.ArgumentParser) -> None:
         default=int(os.getenv("LOCAL_EMBEDDING_DIMENSIONS", "256")),
     )
     parser.add_argument(
-        "--openai-base-url",
-        default=os.getenv("OPENAI_BASE_URL", "https://api.openai.com"),
+        "--embedding-base-url",
+        default=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
     )
 
 
 def _provider(arguments: argparse.Namespace):
+    selected = arguments.embedding_provider
+    api_key = (
+        os.getenv("OPENROUTER_API_KEY")
+        if selected == "openrouter"
+        else os.getenv("OPENAI_API_KEY")
+    )
     return create_embedding_provider(
-        arguments.embedding_provider,
+        selected,
         model=arguments.embedding_model,
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=arguments.openai_base_url,
+        api_key=api_key,
+        base_url=arguments.embedding_base_url,
         local_dimensions=arguments.local_embedding_dimensions,
+        http_referer=os.getenv("OPENROUTER_HTTP_REFERER"),
+        app_title=os.getenv("OPENROUTER_APP_TITLE", "Interview Helper"),
     )
 
 
