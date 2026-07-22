@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_prefix: str = "/api/v1"
     backend_cors_origins: list[str] = ["http://localhost:5173"]
+    knowledge_index_path: str = "data/index/knowledge.db"
 
     stt_provider: str = "stub"
     llm_provider: str = "stub"

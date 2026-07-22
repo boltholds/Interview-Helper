@@ -21,7 +21,21 @@ jobs:
           version: "2.1.3"
           virtualenvs-create: true
       - run: poetry install
-      - run: poetry run ruff check .
+      - name: Run Ruff
+        id: ruff
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          poetry run ruff check . --output-format=concise | tee ruff-report.txt
+      - name: Upload Ruff report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-report
+          path: backend/ruff-report.txt
+      - name: Fail on Ruff errors
+        if: steps.ruff.outcome == 'failure'
+        run: exit 1
       - run: poetry run pytest
 
   frontend:
