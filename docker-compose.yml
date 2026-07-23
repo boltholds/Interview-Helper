@@ -42,8 +42,9 @@ services:
     build:
       context: ./frontend
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000}
+      VITE_API_URL: ${FRONTEND_PUBLIC_HTTP_ORIGIN:-http://localhost:5173}
+      VITE_WS_URL: ${FRONTEND_PUBLIC_WS_ORIGIN:-ws://localhost:5173}
+      VITE_DEV_PROXY_TARGET: http://backend:8000
     ports:
       - "5173:5173"
     volumes:
