@@ -250,9 +250,17 @@ h2 {
 }
 
 .error-banner,
-.warning-banner {
+.warning-banner,
+.capture-guidance {
   border-radius: 12px;
   padding: 0.85rem 1rem;
+}
+
+.capture-guidance {
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  margin: 0 0 1rem;
+  color: #c7d2fe;
+  background: rgba(49, 46, 129, 0.18);
 }
 
 .error-banner {
