@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
-import { MicrophoneStreamer } from "./audio";
+import { DualAudioCapture, encodeAudioFrame } from "./audio";
+import { joinTranscriptTimelines } from "./transcript";
 
 type BackendState = "checking" | "online" | "offline";
 type SessionState = "idle" | "connecting" | "recording" | "stopping" | "error";
@@ -53,12 +54,15 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const socketRef = useRef<WebSocket | null>(null);
-  const microphoneRef = useRef<MicrophoneStreamer | null>(null);
+  const audioCaptureRef = useRef<DualAudioCapture | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const sequenceRef = useRef(0);
   const activeRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
+  const transcriptPrefixRef = useRef("");
+  const finalTranscriptRef = useRef("");
+  const partialTranscriptRef = useRef("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -80,7 +84,7 @@ export default function App() {
     return () => {
       activeRef.current = false;
       socketRef.current?.close();
-      void microphoneRef.current?.stop();
+      void audioCaptureRef.current?.stop();
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
       }
@@ -108,13 +112,15 @@ export default function App() {
     );
   }
 
-  async function startMicrophone(): Promise<void> {
-    if (microphoneRef.current) return;
-    const microphone = new MicrophoneStreamer();
-    microphoneRef.current = microphone;
-    await microphone.start((chunk) => {
+  async function startAudioCapture(): Promise<void> {
+    if (audioCaptureRef.current) return;
+    const capture = new DualAudioCapture();
+    audioCaptureRef.current = capture;
+    await capture.start((source, chunk) => {
       const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) socket.send(chunk);
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(encodeAudioFrame(source, chunk));
+      }
     });
   }
 
@@ -123,27 +129,28 @@ export default function App() {
 
     if (event.type === "stt_ready") {
       reconnectAttemptRef.current = 0;
-      void startMicrophone()
-        .then(() => setSessionState("recording"))
-        .catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : "Microphone access failed";
-          setErrorMessage(message);
-          setSessionState("error");
-          activeRef.current = false;
-          socketRef.current?.close();
-        });
+      setSessionState("recording");
       return;
     }
 
     if (event.type === "transcript_partial") {
-      const fullText = payload.full_text;
-      if (typeof fullText === "string") setPartialTranscript(fullText);
+      const fullText = payload.timeline_text ?? payload.full_text;
+      if (typeof fullText === "string") {
+        const transcript = joinTranscriptTimelines(transcriptPrefixRef.current, fullText);
+        partialTranscriptRef.current = transcript;
+        setPartialTranscript(transcript);
+      }
       return;
     }
 
     if (event.type === "transcript_final") {
-      const fullText = payload.full_text;
-      if (typeof fullText === "string") setFinalTranscript(fullText);
+      const fullText = payload.timeline_text ?? payload.full_text;
+      if (typeof fullText === "string") {
+        const transcript = joinTranscriptTimelines(transcriptPrefixRef.current, fullText);
+        finalTranscriptRef.current = transcript;
+        setFinalTranscript(transcript);
+      }
+      partialTranscriptRef.current = "";
       setPartialTranscript("");
       return;
     }
@@ -194,8 +201,8 @@ export default function App() {
       if (payload.code === "stt_unavailable") {
         activeRef.current = false;
         setSessionState("error");
-        void microphoneRef.current?.stop();
-        microphoneRef.current = null;
+        void audioCaptureRef.current?.stop();
+        audioCaptureRef.current = null;
       }
     }
   }
@@ -210,7 +217,11 @@ export default function App() {
     socketRef.current = socket;
 
     socket.onopen = () => {
-      sendClientEvent("start_session", { language, role });
+      sendClientEvent("start_session", {
+        language,
+        role,
+        audio_protocol: "source_tagged_pcm_v1",
+      });
     };
     socket.onmessage = (message) => {
       if (typeof message.data !== "string") return;
@@ -225,12 +236,17 @@ export default function App() {
     };
     socket.onclose = () => {
       if (!activeRef.current) return;
+      transcriptPrefixRef.current = partialTranscriptRef.current || finalTranscriptRef.current;
+      finalTranscriptRef.current = transcriptPrefixRef.current;
+      partialTranscriptRef.current = "";
+      setFinalTranscript(transcriptPrefixRef.current);
+      setPartialTranscript("");
       if (reconnectAttemptRef.current >= 3) {
         setSessionState("error");
         setErrorMessage("Не удалось восстановить соединение с backend");
         activeRef.current = false;
-        void microphoneRef.current?.stop();
-        microphoneRef.current = null;
+        void audioCaptureRef.current?.stop();
+        audioCaptureRef.current = null;
         return;
       }
       const delay = 500 * 2 ** reconnectAttemptRef.current;
@@ -239,10 +255,13 @@ export default function App() {
     };
   }
 
-  function startInterview(): void {
+  async function startInterview(): Promise<void> {
     setErrorMessage("");
     setFinalTranscript("");
     setPartialTranscript("");
+    transcriptPrefixRef.current = "";
+    finalTranscriptRef.current = "";
+    partialTranscriptRef.current = "";
     setQuestionDraft("");
     setQuestionConfidence(null);
     setAnswer("");
@@ -253,7 +272,23 @@ export default function App() {
     reconnectAttemptRef.current = 0;
     sessionIdRef.current = crypto.randomUUID();
     activeRef.current = true;
-    connectSocket();
+    setSessionState("connecting");
+    try {
+      await startAudioCapture();
+      connectSocket();
+    } catch (error) {
+      const denied = error instanceof DOMException && error.name === "NotAllowedError";
+      setErrorMessage(
+        denied
+          ? "Доступ отменён. Разрешите захват вкладки/экрана с аудио, затем доступ к микрофону."
+          : error instanceof Error
+            ? error.message
+            : "Не удалось запустить захват аудио.",
+      );
+      setSessionState("error");
+      activeRef.current = false;
+      audioCaptureRef.current = null;
+    }
   }
 
   function generateAnswer(): void {
@@ -272,8 +307,8 @@ export default function App() {
   async function stopInterview(): Promise<void> {
     setSessionState("stopping");
     activeRef.current = false;
-    await microphoneRef.current?.stop();
-    microphoneRef.current = null;
+    await audioCaptureRef.current?.stop();
+    audioCaptureRef.current = null;
 
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
@@ -308,7 +343,11 @@ export default function App() {
       <section className="session-controls panel">
         <label>
           Целевая роль
-          <select value={role} onChange={(event) => setRole(event.target.value)} disabled={sessionActive}>
+          <select
+            value={role}
+            onChange={(event) => setRole(event.target.value)}
+            disabled={sessionActive}
+          >
             <option>Python Developer</option>
             <option>Backend Developer</option>
             <option>AI Engineer</option>
@@ -327,15 +366,30 @@ export default function App() {
           </select>
         </label>
         {sessionActive ? (
-          <button type="button" onClick={() => void stopInterview()} disabled={sessionState === "stopping"}>
+          <button
+            type="button"
+            onClick={() => void stopInterview()}
+            disabled={sessionState === "stopping"}
+          >
             {sessionState === "stopping" ? "Завершение…" : "Остановить"}
           </button>
         ) : (
-          <button type="button" onClick={startInterview} disabled={backendState !== "online"}>
+          <button
+            type="button"
+            onClick={() => void startInterview()}
+            disabled={backendState !== "online"}
+          >
             Начать интервью
           </button>
         )}
       </section>
+
+      {!sessionActive && (
+        <p className="capture-guidance">
+          При запуске выберите вкладку, окно или экран с интервью и обязательно включите
+          {" «Поделиться аудио»"}. Затем разрешите микрофон — голоса будут распознаны отдельно.
+        </p>
+      )}
 
       {errorMessage && <p className="error-banner">{errorMessage}</p>}
 
@@ -344,12 +398,15 @@ export default function App() {
           <div className="panel-heading">
             <div>
               <p className="panel__label">Транскрипция · whisper.cpp</p>
-              <h2>Речь интервьюера</h2>
+              <h2>Единая лента разговора</h2>
             </div>
-            <span className={`recording-state recording-state--${sessionState}`}>{sessionState}</span>
+            <span className={`recording-state recording-state--${sessionState}`}>
+              {sessionState}
+            </span>
           </div>
           <p className={visibleTranscript ? "transcript" : "placeholder"}>
-            {visibleTranscript || "Нажмите «Начать интервью» и разрешите доступ к микрофону."}
+            {visibleTranscript ||
+              "Нажмите «Начать интервью» и предоставьте оба разрешения на аудио."}
           </p>
         </article>
 
@@ -373,7 +430,11 @@ export default function App() {
             <button
               type="button"
               onClick={generateAnswer}
-              disabled={!questionDraft.trim() || generationActive || socketRef.current?.readyState !== WebSocket.OPEN}
+              disabled={
+                !questionDraft.trim() ||
+                generationActive ||
+                socketRef.current?.readyState !== WebSocket.OPEN
+              }
             >
               {generationActive ? "Формируем ответ…" : "Сформировать ответ"}
             </button>
@@ -396,7 +457,9 @@ export default function App() {
             </span>
           </div>
           {retrievalWarning && (
-            <p className="warning-banner">RAG недоступен, используется ответ без локального контекста: {retrievalWarning}</p>
+            <p className="warning-banner">
+              RAG недоступен, используется ответ без локального контекста: {retrievalWarning}
+            </p>
           )}
           <div className={answer ? "answer" : "placeholder"}>
             {answer || "Подтвердите обнаруженный вопрос, чтобы получить потоковую подсказку."}
@@ -408,7 +471,9 @@ export default function App() {
                 {sources.map((source) => (
                   <li key={`${source.source_path}-${source.title}`}>
                     <strong>{source.title}</strong>
-                    <span>{source.source_path} · score {source.score.toFixed(3)}</span>
+                    <span>
+                      {source.source_path} · score {source.score.toFixed(3)}
+                    </span>
                   </li>
                 ))}
               </ul>

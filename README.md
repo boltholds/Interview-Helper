@@ -28,12 +28,12 @@ docker-compose.gpu.yml      NVIDIA GPU override
 ## Architecture
 
 ```text
-Browser microphone
-  -> AudioWorklet: mono PCM16, 16 kHz
-  -> FastAPI WebSocket
-  -> rolling STT windows
+Browser tab/window/screen audio (interviewer) + microphone (candidate)
+  -> two AudioWorklets: mono PCM16, 16 kHz
+  -> source-tagged binary frames on one FastAPI WebSocket
+  -> independent rolling STT windows per source
   -> whispercpp container: whisper-server
-  -> partial/final transcript events
+  -> speaker-tagged events on one arrival-ordered timeline
 
 Knowledge sources
   -> OpenRouter embeddings
@@ -96,7 +96,22 @@ The GPU override builds whisper.cpp with CUDA, requests all available GPUs for t
 
 ## Transcription behavior
 
-The browser captures microphone audio through an `AudioWorklet`, downsamples it to signed little-endian PCM16 mono at 16 kHz, and sends binary WebSocket frames to `/ws/interview/{session_id}`. JSON frames on the same socket control session start and stop.
+On **Start interview**, the browser first asks you to select a tab, window, or screen. Enable
+**Share audio** in that picker; sharing video is required by the browser API but its video track is
+stopped immediately. The browser then requests microphone access. The shared/system audio is the
+`interviewer` source and microphone audio is the `candidate` source.
+
+Each source has its own `AudioWorklet`, is downsampled to signed little-endian PCM16 mono at 16 kHz,
+and is sent to `/ws/interview/{session_id}` using `source_tagged_pcm_v1`: one source byte (`1` for
+interviewer, `2` for candidate) followed by PCM16. The backend keeps independent STT state, adds
+`source`, `speaker`, and `timeline_text` to transcript events, and only detects questions from the
+interviewer stream. Legacy clients that omit `audio_protocol` may continue sending raw PCM frames,
+which are treated as interviewer audio.
+
+Each socket numbers binary frames in arrival order. On `stop_session`, residual per-source STT
+buffers are flushed by the first frame received for each source (sources with no audio sort last).
+This deterministic rule follows the beginning of the buffered wire audio rather than the fixed
+interviewer/candidate source order.
 
 Default rolling-window parameters:
 
@@ -105,7 +120,8 @@ Default rolling-window parameters:
 - 1 second overlap between final windows;
 - automatic language detection;
 - structured `stt_unavailable` and `stt_failed` errors;
-- up to three frontend WebSocket reconnection attempts.
+- up to three frontend WebSocket reconnection attempts;
+- capture remains active during socket reconnects and resumes sending when the socket reopens.
 
 The backend checks `http://whispercpp:8080/health` when a session starts. The container exposes the official whisper.cpp `/health` and `/inference` endpoints and keeps the model resident between requests.
 
