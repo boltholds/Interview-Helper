@@ -25,6 +25,20 @@ from stt.factory import create_transcriber
 from stt.whispercpp import WhisperCppError
 
 router = APIRouter()
+SOURCE_TAGS = {1: "interviewer", 2: "candidate"}
+SPEAKERS = {"interviewer": "interviewer", "candidate": "candidate"}
+
+
+def _decode_audio_frame(audio: bytes, *, tagged: bool) -> tuple[str, bytes]:
+    """Decode dual-source v1, retaining legacy raw PCM as interviewer audio."""
+    if not tagged:
+        return "interviewer", audio
+    if not audio or audio[0] not in SOURCE_TAGS:
+        raise ValueError("Invalid source-tagged audio frame")
+    pcm16 = audio[1:]
+    if not pcm16 or len(pcm16) % 2:
+        raise ValueError("Audio payload must contain complete PCM16 samples")
+    return SOURCE_TAGS[audio[0]], pcm16
 
 
 async def _send_event(
@@ -74,9 +88,22 @@ async def _send_transcript_updates(
     updates: Iterable[TranscriptUpdate],
     *,
     detector: QuestionDetector,
+    source: str,
+    timeline: list[tuple[str, str]],
     send_lock: asyncio.Lock,
 ) -> None:
     for update in updates:
+        if update.is_final and update.text.strip():
+            timeline.append((source, update.text.strip()))
+        timeline_text = "\n".join(
+            f"{SPEAKERS[item_source]}: {text}" for item_source, text in timeline
+        )
+        if not update.is_final and update.text.strip():
+            timeline_text = "\n".join(
+                part
+                for part in (timeline_text, f"{SPEAKERS[source]}: {update.text.strip()}")
+                if part
+            )
         await _send_event(
             websocket,
             event_type=(
@@ -92,10 +119,15 @@ async def _send_transcript_updates(
                 "start_ms": update.start_ms,
                 "end_ms": update.end_ms,
                 "language": update.language,
+                "source": source,
+                "speaker": SPEAKERS[source],
+                "timeline_text": timeline_text,
             },
             send_lock=send_lock,
         )
         if not update.is_final:
+            continue
+        if source != "interviewer":
             continue
         question = detector.feed(update.full_text)
         if question is None:
@@ -203,13 +235,19 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                 "encoding": "pcm_s16le",
                 "sample_rate": 16_000,
                 "channels": 1,
+                "protocols": ["raw_pcm", "source_tagged_pcm_v1"],
+                "source_tags": {"interviewer": 1, "candidate": 2},
             },
         },
         send_lock=send_lock,
     )
 
     settings = get_settings()
-    transcriber: StreamingTranscriber | None = None
+    transcribers: dict[str, StreamingTranscriber] = {}
+    tagged_audio = False
+    timeline: list[tuple[str, str]] = []
+    audio_arrival_sequence = 0
+    first_pending_audio_arrival: dict[str, int] = {}
     detector = QuestionDetector()
     generation_task: asyncio.Task[None] | None = None
     role = "Python Developer"
@@ -223,7 +261,7 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
 
             audio = message.get("bytes")
             if audio is not None:
-                if transcriber is None:
+                if not transcribers:
                     await _send_error(
                         websocket,
                         session_id,
@@ -233,7 +271,10 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                     )
                     continue
                 try:
-                    updates = await transcriber.push_audio(audio)
+                    source, pcm16 = _decode_audio_frame(audio, tagged=tagged_audio)
+                    first_pending_audio_arrival.setdefault(source, audio_arrival_sequence)
+                    audio_arrival_sequence += 1
+                    updates = await transcribers[source].push_audio(pcm16)
                 except (ValueError, WhisperCppError) as exc:
                     await _send_error(
                         websocket,
@@ -248,6 +289,8 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                     session_id,
                     updates,
                     detector=detector,
+                    source=source,
+                    timeline=timeline,
                     send_lock=send_lock,
                 )
                 continue
@@ -296,8 +339,12 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
             )
 
             if event.type == ClientEventType.START_SESSION:
-                if transcriber is not None:
+                for transcriber in transcribers.values():
                     await transcriber.close()
+                transcribers = {}
+                timeline.clear()
+                audio_arrival_sequence = 0
+                first_pending_audio_arrival.clear()
                 detector.reset()
                 await _cancel_generation(generation_task)
                 generation_task = None
@@ -305,17 +352,21 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                 language = str(language_value) if language_value else settings.whispercpp_language
                 role_value = event.payload.get("role")
                 role = str(role_value).strip() if role_value else role
+                tagged_audio = event.payload.get("audio_protocol") == "source_tagged_pcm_v1"
                 try:
-                    transcriber = create_transcriber(settings, language=language)
-                    validator = getattr(transcriber, "validate_runtime", None)
-                    if callable(validator):
-                        validation_result = validator()
-                        if inspect.isawaitable(validation_result):
-                            await validation_result
+                    sources = ("interviewer", "candidate") if tagged_audio else ("interviewer",)
+                    for source in sources:
+                        transcriber = create_transcriber(settings, language=language)
+                        transcribers[source] = transcriber
+                        validator = getattr(transcriber, "validate_runtime", None)
+                        if callable(validator):
+                            validation_result = validator()
+                            if inspect.isawaitable(validation_result):
+                                await validation_result
                 except (ValueError, WhisperCppError) as exc:
-                    if transcriber is not None:
+                    for transcriber in transcribers.values():
                         await transcriber.close()
-                    transcriber = None
+                    transcribers = {}
                     await _send_error(
                         websocket,
                         session_id,
@@ -336,6 +387,8 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                         "encoding": "pcm_s16le",
                         "sample_rate": 16_000,
                         "channels": 1,
+                        "audio_protocol": "source_tagged_pcm_v1" if tagged_audio else "raw_pcm",
+                        "sources": list(transcribers),
                     },
                     send_lock=send_lock,
                 )
@@ -387,7 +440,16 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                 continue
 
             if event.type == ClientEventType.STOP_SESSION:
-                if transcriber is not None:
+                # A stream's residual audio starts with its first frame since session
+                # start. Flush by that sequence so output follows wire arrival rather
+                # than source/dict order.
+                flush_order = sorted(
+                    transcribers.items(),
+                    key=lambda item: first_pending_audio_arrival.get(
+                        item[0], audio_arrival_sequence
+                    ),
+                )
+                for source, transcriber in flush_order:
                     try:
                         updates = await transcriber.flush()
                         await _send_transcript_updates(
@@ -395,6 +457,8 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                             session_id,
                             updates,
                             detector=detector,
+                            source=source,
+                            timeline=timeline,
                             send_lock=send_lock,
                         )
                     except (ValueError, WhisperCppError) as exc:
@@ -408,7 +472,7 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
                         )
                     finally:
                         await transcriber.close()
-                        transcriber = None
+                transcribers = {}
                 await _send_event(
                     websocket,
                     event_type=ServerEventType.STT_STOPPED,
@@ -421,5 +485,5 @@ async def interview_socket(websocket: WebSocket, session_id: str) -> None:
         pass
     finally:
         await _cancel_generation(generation_task)
-        if transcriber is not None:
+        for transcriber in transcribers.values():
             await transcriber.close()
