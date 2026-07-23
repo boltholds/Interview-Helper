@@ -69,6 +69,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Reject CRLF shell scripts
+        run: |
+          if grep -rIl $'\r' --include='*.sh' .; then
+            echo "Shell scripts must use LF line endings"
+            exit 1
+          fi
       - run: cp .env.example .env
       - run: docker compose config --quiet
       - run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
