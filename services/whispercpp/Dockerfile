@@ -20,7 +20,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/whisper.cpp/build/bin/whisper-server /usr/local/bin/whisper-server
 COPY entrypoint.sh /usr/local/bin/whispercpp-entrypoint
-RUN chmod +x /usr/local/bin/whispercpp-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/whispercpp-entrypoint \
+    && chmod +x /usr/local/bin/whispercpp-entrypoint
 
 ENV WHISPERCPP_MODEL=small \
     WHISPERCPP_MODEL_DIR=/models \
